@@ -14,6 +14,13 @@ class OcDao
      */
     private $db;
 
+    private $table;
+    private $select = '*';
+    private $where;
+    private $offset = 0;
+    private $limit = null;
+    private $orderBy;
+
     /**
      * @var string SQL
      */
@@ -35,13 +42,20 @@ class OcDao
         if (stripos($table, $tablePrefix) === false) {
             $table = $tablePrefix . $table;
         }
+        if (strpos($table, '`') === false) {
+            $table = "`$table`";
+        }
 
-        return "`$table`";
+        return $table;
     }
 
     private function quoteColumn($column)
     {
-        return $this->simpleQuote($column);
+        if (strpos($column, '`') === false) {
+            $column = $this->simpleQuote($column);
+        }
+
+        return $column;
     }
 
     private function quoteValue($value)
@@ -78,26 +92,30 @@ class OcDao
     private function buildCondition($condition, $params)
     {
         $where = '';
-        if (is_array($condition) && $condition) {
-            $ws = [];
-            foreach ($condition as $key => $value) {
-                $s = $this->quoteColumn($key);
-                if (is_array($value)) {
-                    $valueList = [];
-                    foreach ($value as $v) {
-                        if (is_numeric($v)) {
-                            $valueList[] = $v;
-                        } else {
-                            $valueList[] = $this->quoteValue($v);
+        if (is_array($condition)) {
+            if ($condition) {
+                $ws = [];
+                foreach ($condition as $key => $value) {
+                    $s = $this->quoteColumn($key);
+                    if (is_array($value)) {
+                        $valueList = [];
+                        foreach ($value as $v) {
+                            if (is_numeric($v)) {
+                                $valueList[] = $v;
+                            } else {
+                                $valueList[] = $this->quoteValue($v);
+                            }
                         }
+                        $s .= ' IN (' . implode(", ", $valueList) . ')';
+                    } else {
+                        $s .= ' = ' . (is_numeric($value) ? $value : $this->quoteValue($value));
                     }
-                    $s .= ' IN (' . implode(", ", $valueList) . ')';
-                } else {
-                    $s .= ' = ' . (is_numeric($value) ? $value : $this->quoteValue($value));
+                    $ws[] = $s;
                 }
-                $ws[] = $s;
+                $where = implode(" AND ", $ws);
             }
-            $where = implode(" AND ", $ws);
+        } elseif (is_null($condition)) {
+            $where = '';
         } elseif (!is_string($condition)) {
             throw new Exception("Condition error.");
         }
@@ -107,6 +125,20 @@ class OcDao
         }
 
         return $where;
+    }
+
+    private function parseOrderBy($orderBy)
+    {
+        $s = [];
+        if ($orderBy) {
+            if (is_array($orderBy)) {
+                foreach ($orderBy as $k => $v) {
+                    $s[] = $this->quoteColumn($k) . ($v == SORT_DESC ? ' DESC' : ' ASC');
+                }
+            }
+        }
+
+        $this->orderBy = $s ? implode(', ', $s) : '';
     }
 
     /**
@@ -156,6 +188,160 @@ class OcDao
         $this->sql = $sql;
 
         return $this;
+    }
+
+    public function select($select)
+    {
+        if ($select && is_string($select)) {
+            $select = explode(",", $select);
+        } elseif (!is_array($select)) {
+            $select = [];
+        }
+        if ($select) {
+            $ss = [];
+            foreach ($select as $v) {
+                $v = trim($v);
+                $ss[] = $v != '*' ? $this->quoteColumn($v) : $v;
+            }
+            $this->select = implode(", ", $ss);
+        }
+
+        return $this;
+    }
+
+    public function from($table)
+    {
+        $this->table = $this->quoteTable($table);
+
+        return $this;
+    }
+
+    /**
+     * @param $condition
+     * @param $params
+     * @return $this
+     * @throws Exception
+     */
+    public function where($condition, $params)
+    {
+        $this->where = $this->buildCondition($condition, $params);
+
+        return $this;
+    }
+
+    public function orderBy($orders)
+    {
+        $s = [];
+        if ($orders) {
+            if (is_array($orders)) {
+                foreach ($orders as $k => $v) {
+                    $s[] = $this->quoteColumn($k) . ($v == SORT_DESC ? ' DESC' : ' ASC');
+                }
+            }
+        }
+
+        $this->orderBy = $s ? implode(', ', $s) : '';
+
+        return $this;
+    }
+
+    public function offset($n)
+    {
+        $n = (int) $n;
+        $this->offset = $n < 0 ? 0 : $n;
+
+        return $this;
+    }
+
+    public function limit($n)
+    {
+        $n = (int) $n;
+        $this->limit = $n < 0 ? 0 : $n;
+
+        return $this;
+    }
+
+    /**
+     * 返回一条记录
+     *
+     * @return mixed
+     * @throws Exception
+     */
+    public function one()
+    {
+        $sql = "SELECT {$this->select} FROM {$this->table}";
+        if ($this->where) {
+            $sql .= " WHERE {$this->where}";
+        }
+        if ($this->orderBy) {
+            $sql .= " ORDER BY {$this->orderBy}";
+        }
+        $this->limit(1);
+        $sql .= " LIMIT $this->offset, $this->limit";
+        $this->sql = $sql;
+        $q = $this->_execute();
+
+        return $q === false ? false : $q->row;
+    }
+
+    /**
+     * 返回多条记录
+     *
+     * @return array
+     */
+    public function all()
+    {
+        $sql = "SELECT {$this->select} FROM {$this->table}";
+        if ($this->where) {
+            $sql .= " WHERE {$this->where}";
+        }
+        if ($this->orderBy) {
+            $sql .= " ORDER BY {$this->orderBy}";
+        }
+        if ($this->limit) {
+            $sql .= " LIMIT $this->offset, $this->limit";
+        }
+
+        $this->sql = $sql;
+        $q = $this->_execute();
+
+        return $q === false ? [] : $q->rows;
+    }
+
+    /**
+     * @return bool If not found, will return false
+     * @throws Exception
+     */
+    public function scalar()
+    {
+        $res = false;
+        $data = $this->one();
+        if ($data !== false) {
+            foreach ($data as $k => $v) {
+                if ($k == 0) {
+                    $res = $v;
+                    break;
+                }
+            }
+        }
+
+        return $res;
+    }
+
+    public function column()
+    {
+        $res = [];
+        $rows = $this->all();
+        foreach ($rows as $row) {
+            foreach ($row as $k => $v) {
+                if ($k == 0) {
+                    $res[] = $v;
+                    break;
+                }
+            }
+        }
+
+        return $res;
     }
 
     /**
@@ -215,9 +401,13 @@ class OcDao
 
     private function _execute()
     {
-        $q = $this->db->query($this->sql);
+        try {
+            $q = $this->db->query($this->sql);
 
-        return $q;
+            return $q;
+        } catch (\Exception $e) {
+            return false;
+        }
     }
 
     public function execute()
