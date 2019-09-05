@@ -3,7 +3,6 @@
 /**
  * OpenCart Database Access Objects
  *
- *
  * @author hiscaler <hiscaler@gmail.com>
  */
 class OcDao
@@ -16,10 +15,14 @@ class OcDao
 
     private $table;
     private $select = '*';
+    private $selectSet = [];
     private $where;
     private $offset = 0;
     private $limit = null;
     private $orderBy;
+    private $leftJoin;
+    protected $tableQuoteCharacter = "`";
+    protected $columnQuoteCharacter = '`';
 
     /**
      * @var string SQL
@@ -31,36 +34,86 @@ class OcDao
         $this->db = $registry->get('db');
     }
 
-    private function simpleQuote($v)
+    private function quoteSimpleTableName($name)
     {
-        return "`$v`";
+        if (is_string($this->tableQuoteCharacter)) {
+            $startingCharacter = $endingCharacter = $this->tableQuoteCharacter;
+        } else {
+            list($startingCharacter, $endingCharacter) = $this->tableQuoteCharacter;
+        }
+
+        return strpos($name, $startingCharacter) !== false ? $name : $startingCharacter . $name . $endingCharacter;
     }
 
-    private function quoteTable($table)
+    private function quoteTableName($name)
     {
-        $tablePrefix = DB_PREFIX;
-        if (stripos($table, $tablePrefix) === false) {
-            $table = $tablePrefix . $table;
+        if (strpos($name, '(') !== false || strpos($name, '{{') !== false) {
+            return $name;
         }
-        if (strpos($table, '`') === false) {
-            $table = "`$table`";
+        if (strpos($name, '.') === false) {
+            return $this->quoteSimpleTableName($name);
+        }
+        $parts = explode('.', $name);
+        foreach ($parts as $i => $part) {
+            $parts[$i] = $this->quoteSimpleTableName($part);
         }
 
-        return $table;
+        return implode('.', $parts);
     }
 
-    private function quoteColumn($column)
+    private function quoteSimpleColumnName($name)
     {
-        if (strpos($column, '`') === false) {
-            $column = $this->simpleQuote($column);
+        if (is_string($this->tableQuoteCharacter)) {
+            $startingCharacter = $endingCharacter = $this->columnQuoteCharacter;
+        } else {
+            list($startingCharacter, $endingCharacter) = $this->columnQuoteCharacter;
         }
 
-        return $column;
+        return $name === '*' || strpos($name, $startingCharacter) !== false ? $name : $startingCharacter . $name . $endingCharacter;
+    }
+
+    private function quoteColumnName($name)
+    {
+        if (strpos($name, '(') !== false || strpos($name, '[[') !== false) {
+            return $name;
+        }
+        if (($pos = strrpos($name, '.')) !== false) {
+            $prefix = $this->quoteTableName(substr($name, 0, $pos)) . '.';
+            $name = substr($name, $pos + 1);
+        } else {
+            $prefix = '';
+        }
+        if (strpos($name, '{{') !== false) {
+            return $name;
+        }
+
+        return $prefix . $this->quoteSimpleColumnName($name);
     }
 
     private function quoteValue($value)
     {
-        return "'$value'";
+        if (!is_string($value)) {
+            return $value;
+        }
+
+        return "'" . addcslashes(str_replace("'", "''", $value), "\000\n\r\\\032") . "'";
+    }
+
+    public function quoteSql($sql)
+    {
+        $sql = preg_replace_callback(
+            '/(\\{\\{(%?[\w\-\. ]+%?)\\}\\}|\\[\\[([\w\-\. ]+)\\]\\])/',
+            function ($matches) {
+                if (isset($matches[3])) {
+                    return $this->quoteColumnName($matches[3]);
+                }
+
+                return str_replace('%', DB_PREFIX, $this->quoteTableName($matches[2]));
+            },
+            $sql
+        );
+
+        return $sql;
     }
 
     public function insert($table, $columns)
@@ -69,13 +122,13 @@ class OcDao
         $fields = [];
         $values = [];
         foreach ($columns as $column => $value) {
-            $fields[] = $this->quoteColumn($column);
+            $fields[] = $this->quoteColumnName($column);
             $values[] = $this->quoteValue($value);
         }
         $sql .= " (" . implode(', ', $fields) . ")";
         $sql .= " VALUES (" . implode(', ', $values) . ")";
 
-        $this->sql = sprintf($sql, $this->quoteTable($table));
+        $this->sql = sprintf($sql, $this->quoteTableName($table));
 
         return $this;
     }
@@ -96,7 +149,7 @@ class OcDao
             if ($condition) {
                 $ws = [];
                 foreach ($condition as $key => $value) {
-                    $s = $this->quoteColumn($key);
+                    $s = $this->quoteColumnName($key);
                     if (is_array($value)) {
                         $valueList = [];
                         foreach ($value as $v) {
@@ -116,29 +169,17 @@ class OcDao
             }
         } elseif (is_null($condition)) {
             $where = '';
+        } elseif (is_string($condition)) {
+            $where = $condition;
         } elseif (!is_string($condition)) {
             throw new Exception("Condition error.");
         }
 
         if ($params) {
-            $where = strtr($where, $params);
+            $where = strtr($condition, $params);
         }
 
         return $where;
-    }
-
-    private function parseOrderBy($orderBy)
-    {
-        $s = [];
-        if ($orderBy) {
-            if (is_array($orderBy)) {
-                foreach ($orderBy as $k => $v) {
-                    $s[] = $this->quoteColumn($k) . ($v == SORT_DESC ? ' DESC' : ' ASC');
-                }
-            }
-        }
-
-        $this->orderBy = $s ? implode(', ', $s) : '';
     }
 
     /**
@@ -156,9 +197,9 @@ class OcDao
         if ($columns) {
             $sets = [];
             foreach ($columns as $k => $v) {
-                $sets[] = self::quoteColumn($k) . ' = ' . $this->quoteValue($v);
+                $sets[] = self::quoteColumnName($k) . ' = ' . $this->quoteValue($v);
             }
-            $sql = "UPDATE " . $this->quoteTable($table) . " SET " . implode(", ", $sets);
+            $sql = "UPDATE " . $this->quoteTableName($table) . " SET " . implode(", ", $sets);
             $where = $this->buildCondition($condition, $params);
             if ($where) {
                 $sql .= " WHERE $where";
@@ -182,7 +223,7 @@ class OcDao
      */
     public function delete($table, $condition = '', $params = [])
     {
-        $sql = "DELETE FROM " . $this->quoteTable($table);
+        $sql = "DELETE FROM " . $this->quoteTableName($table);
         $where = $this->buildCondition($condition, $params);
         $where && $sql .= " WHERE $where";
         $this->sql = $sql;
@@ -190,7 +231,7 @@ class OcDao
         return $this;
     }
 
-    public function select($select)
+    private function _select($select, $append = false)
     {
         if ($select && is_string($select)) {
             $select = explode(",", $select);
@@ -198,25 +239,57 @@ class OcDao
             $select = [];
         }
         if ($select) {
+            $select = array_filter(array_unique($select));
             $ss = [];
             foreach ($select as $v) {
                 $v = trim($v);
-                $ss[] = $v != '*' ? $this->quoteColumn($v) : $v;
+                if (in_array($v, $this->selectSet)) {
+                    continue;
+                } else {
+                    $this->selectSet[] = $v;
+                    $ss[] = $v != '*' ? $this->quoteColumnName($v) : $v;
+                }
             }
-            $this->select = implode(", ", $ss);
+            if ($ss) {
+                if ($append) {
+                    $select = implode(", ", $ss);
+                    $originalSelect = $this->select;
+                    if ($originalSelect) {
+                        $this->select = "$originalSelect, $select";
+                    } else {
+                        $this->select = $select;
+                    }
+                } else {
+                    $this->select = implode(", ", $ss);
+                }
+            }
         }
+    }
+
+    public function select($select)
+    {
+        $this->_select($select, false);
+
+        return $this;
+    }
+
+    public function addSelect($select)
+    {
+        $this->_select($select, true);
 
         return $this;
     }
 
     public function from($table)
     {
-        $this->table = $this->quoteTable($table);
+        $this->table = $this->quoteTableName($table);
 
         return $this;
     }
 
     /**
+     * Where
+     *
      * @param $condition
      * @param $params
      * @return $this
@@ -235,7 +308,7 @@ class OcDao
         if ($orders) {
             if (is_array($orders)) {
                 foreach ($orders as $k => $v) {
-                    $s[] = $this->quoteColumn($k) . ($v == SORT_DESC ? ' DESC' : ' ASC');
+                    $s[] = $this->quoteColumnName($k) . ($v == SORT_DESC ? ' DESC' : ' ASC');
                 }
             }
         }
@@ -262,6 +335,27 @@ class OcDao
     }
 
     /**
+     * Left Join
+     *
+     * @param $table
+     * @param $condition
+     * @param $params
+     * @return $this
+     * @throws Exception
+     */
+    public function leftJoin($table, $condition = null, $params = [])
+    {
+        $sql = "LEFT JOIN " . $this->quoteTableName($table);
+        $where = $this->buildCondition($condition, $params);
+        if ($where) {
+            $sql .= ' ON ' . $where;
+        }
+        $this->leftJoin = $sql;
+
+        return $this;
+    }
+
+    /**
      * 返回一条记录
      *
      * @return mixed
@@ -270,6 +364,9 @@ class OcDao
     public function one()
     {
         $sql = "SELECT {$this->select} FROM {$this->table}";
+        if ($this->leftJoin) {
+            $sql .= " $this->leftJoin";
+        }
         if ($this->where) {
             $sql .= " WHERE {$this->where}";
         }
@@ -292,6 +389,9 @@ class OcDao
     public function all()
     {
         $sql = "SELECT {$this->select} FROM {$this->table}";
+        if ($this->leftJoin) {
+            $sql .= " $this->leftJoin";
+        }
         if ($this->where) {
             $sql .= " WHERE {$this->where}";
         }
@@ -365,7 +465,7 @@ class OcDao
      */
     public function count($table, $condition = '', $params = [])
     {
-        $sql = 'SELECT COUNT(*) AS ' . $this->quoteColumn('n') . ' FROM ' . $this->quoteTable($table);
+        $sql = 'SELECT COUNT(*) AS ' . $this->quoteColumnName('n') . ' FROM ' . $this->quoteTableName($table);
         $where = $this->buildCondition($condition, $params);
         $where && $sql .= " WHERE $where";
         $this->sql = $sql;
@@ -386,7 +486,7 @@ class OcDao
      */
     public function sum($table, $field, $condition = '', $params = [])
     {
-        $sql = 'SELECT SUM(' . $this->quoteColumn($field) . ') AS ' . $this->quoteColumn('n') . ' FROM ' . $this->quoteTable($table);
+        $sql = 'SELECT SUM(' . $this->quoteColumnName($field) . ') AS ' . $this->quoteColumnName('n') . ' FROM ' . $this->quoteTableName($table);
         $where = $this->buildCondition($condition, $params);
         $where && $sql .= " WHERE $where";
         $this->sql = $sql;
@@ -402,7 +502,8 @@ class OcDao
     private function _execute()
     {
         try {
-            $q = $this->db->query($this->sql);
+            $sql = $this->quoteSql($this->sql);
+            $q = $this->db->query($sql);
 
             return $q;
         } catch (\Exception $e) {
@@ -427,7 +528,7 @@ class OcDao
 
     public function getRawSql()
     {
-        return $this->sql;
+        return $this->quoteSql($this->sql);
     }
 
 }
