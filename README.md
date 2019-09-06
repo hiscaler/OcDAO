@@ -6,24 +6,34 @@ OpenCart Database Access Objects
 ### 加载
 ```php
 $this->load->library('OcDao');
-$ocDao = new OcDao($this->registry);
+$ocDao = new OcDao($this->registry, false);
 ```
+
+如果您需要启用调试模式，在创建 OcDao 对象的时候，第二个参数请传入 true, 之后每一次执行 SQL 语句，都将打印当前执行的 SQL 语句以及调用文件和行数，方便您调试。生产环境下，请关闭。以免暴露相关信息。
+
+```php
+...
+$ocDao = new OcDao($this->registry, true);
+```
+
 
 ### 添加
 ```php
-$ocDao->insert('user', ['username' => "hiscaler"])->execute();
+$ocDao->reset()->insert('user', ['username' => "hiscaler"])->execute();
 ```
 
 ### 更新
 ```php
-$ocDao->update('user', ['username' => 'John'], ['id' => 1])->execute();
+$ocDao->reset()->update('user', ['username' => 'John'], ['id' => 1])->execute();
 ```
 
 ### 查询
 
 #### 查询一条数据
 ```php
-$user = $this->ocDao->from('{{%user}}')
+$user = $this->ocDao
+            ->reset()
+            ->from('{{%user}}')
             ->select(['user_id', 'username'])
             ->orderBy(['user_id' => SORT_DESC])
             ->one();
@@ -37,7 +47,9 @@ SELECT `user_id`, `username` FROM `oc_user` ORDER BY `user_id` DESC LIMIT 0, 1
 
 #### 查询多条数据
 ```php
-$users = $this->ocDao->from('{{%user}}')
+$users = $this->ocDao
+            ->reset()
+            ->from('{{%user}}')
             ->select(['user_id', 'username'])
             ->limit(2)
             ->orderBy(['user_id' => SORT_DESC])
