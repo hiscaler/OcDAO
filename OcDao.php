@@ -13,6 +13,11 @@ class OcDao
      */
     private $db;
 
+    /**
+     * @var bool Active debug mode, if set to true, will print SQL string and call back traces.
+     */
+    private $debug = false;
+
     private $table;
     private $select = '*';
     private $selectSet = [];
@@ -21,17 +26,19 @@ class OcDao
     private $limit = null;
     private $orderBy;
     private $leftJoin;
-    protected $tableQuoteCharacter = "`";
-    protected $columnQuoteCharacter = '`';
+    private $tableQuoteCharacter = "`";
+    private $columnQuoteCharacter = '`';
+    private $indexBy;
 
     /**
      * @var string SQL
      */
     private $sql;
 
-    public function __construct($registry)
+    public function __construct($registry, $debug = false)
     {
         $this->db = $registry->get('db');
+        $this->debug = $debug;
     }
 
     private function quoteSimpleTableName($name)
@@ -99,7 +106,31 @@ class OcDao
         return "'" . addcslashes(str_replace("'", "''", $value), "\000\n\r\\\032") . "'";
     }
 
-    public function quoteSql($sql)
+    /**
+     * Collection SQL string, Not complete SQL statement
+     *
+     * @return string
+     */
+    private function collectionSql()
+    {
+        $sql = '';
+        if ($this->leftJoin) {
+            $sql .= " $this->leftJoin";
+        }
+        if ($this->where) {
+            $sql .= " WHERE {$this->where}";
+        }
+        if ($this->orderBy) {
+            $sql .= " ORDER BY {$this->orderBy}";
+        }
+        if ($this->limit) {
+            $sql .= " LIMIT $this->offset, $this->limit";
+        }
+
+        return $sql;
+    }
+
+    private function quoteSql($sql)
     {
         $sql = preg_replace_callback(
             '/(\\{\\{(%?[\w\-\. ]+%?)\\}\\}|\\[\\[([\w\-\. ]+)\\]\\])/',
@@ -114,6 +145,27 @@ class OcDao
         );
 
         return $sql;
+    }
+
+    /**
+     * Reset all value
+     *
+     * @return $this
+     */
+    public function reset()
+    {
+        $this->table = null;
+        $this->select = '*';
+        $this->selectSet = [];
+        $this->where = null;
+        $this->offset = 0;
+        $this->limit = null;
+        $this->orderBy = null;
+        $this->leftJoin = null;
+        $this->indexBy = null;
+        $this->sql = null;
+
+        return $this;
     }
 
     public function insert($table, $columns)
@@ -295,7 +347,7 @@ class OcDao
      * @return $this
      * @throws Exception
      */
-    public function where($condition, $params)
+    public function where($condition, $params = [])
     {
         $this->where = $this->buildCondition($condition, $params);
 
@@ -334,6 +386,14 @@ class OcDao
         return $this;
     }
 
+    public function indexBy($name)
+    {
+        $this->indexBy = $name;
+        $this->addSelect($name);
+
+        return $this;
+    }
+
     /**
      * Left Join
      *
@@ -363,18 +423,12 @@ class OcDao
      */
     public function one()
     {
-        $sql = "SELECT {$this->select} FROM {$this->table}";
-        if ($this->leftJoin) {
-            $sql .= " $this->leftJoin";
-        }
-        if ($this->where) {
-            $sql .= " WHERE {$this->where}";
-        }
-        if ($this->orderBy) {
-            $sql .= " ORDER BY {$this->orderBy}";
-        }
         $this->limit(1);
-        $sql .= " LIMIT $this->offset, $this->limit";
+        $sql = "SELECT {$this->select} FROM {$this->table}";
+        $sql2 = $this->collectionSql();
+        if ($sql2) {
+            $sql .= " $sql2";
+        }
         $this->sql = $sql;
         $q = $this->_execute();
 
@@ -389,23 +443,30 @@ class OcDao
     public function all()
     {
         $sql = "SELECT {$this->select} FROM {$this->table}";
-        if ($this->leftJoin) {
-            $sql .= " $this->leftJoin";
-        }
-        if ($this->where) {
-            $sql .= " WHERE {$this->where}";
-        }
-        if ($this->orderBy) {
-            $sql .= " ORDER BY {$this->orderBy}";
-        }
-        if ($this->limit) {
-            $sql .= " LIMIT $this->offset, $this->limit";
+        $sql2 = $this->collectionSql();
+        if ($sql2) {
+            $sql .= " $sql2";
         }
 
         $this->sql = $sql;
         $q = $this->_execute();
 
-        return $q === false ? [] : $q->rows;
+        $rawRows = $q === false ? [] : $q->rows;
+        if ($rawRows && $this->indexBy) {
+            $indexName = $this->indexBy;
+            if (($pos = strrpos($indexName, ".")) !== false) {
+                $indexName = substr($indexName, $pos);
+            }
+            $indexName = str_replace("`", '', $indexName);
+            $rows = [];
+            foreach ($rawRows as $row) {
+                $rows[$row[$indexName]] = $row;
+            }
+        } else {
+            $rows = $rawRows;
+        }
+
+        return $rows;
     }
 
     /**
@@ -431,12 +492,27 @@ class OcDao
     public function column()
     {
         $res = [];
-        $rows = $this->all();
-        foreach ($rows as $row) {
-            foreach ($row as $k => $v) {
-                if ($k == 0) {
-                    $res[] = $v;
-                    break;
+        $valueKey = null;
+        foreach ($this->all() as $k => $row) {
+            foreach ($row as $kk => $vv) {
+                if ($this->indexBy) {
+                    if ($kk == $this->indexBy) {
+                        if ($valueKey === null) {
+                            foreach ($this->selectSet as $s) {
+                                if ($s != $this->indexBy) {
+                                    $valueKey = $s;
+                                    break;
+                                }
+                            }
+                        }
+                        $res[$k] = $row[$valueKey];
+                        break;
+                    }
+                } else {
+                    if ($kk == 0) {
+                        $res[] = $vv;
+                        break;
+                    }
                 }
             }
         }
@@ -445,29 +521,35 @@ class OcDao
     }
 
     /**
-     * @param $table
-     * @param string $condition
-     * @param array $params
      * @return boolean
      * @throws Exception
      */
-    public function exist($table, $condition = '', $params = [])
+    public function exist()
     {
-        return $this->count($table, $condition, $params) ? true : false;
+        return $this->count('*') ? true : false;
     }
 
     /**
-     * @param $table
-     * @param string $condition
-     * @param array $params
+     * @param string $name
      * @return float
      * @throws Exception
      */
-    public function count($table, $condition = '', $params = [])
+    public function count($name = '*')
     {
-        $sql = 'SELECT COUNT(*) AS ' . $this->quoteColumnName('n') . ' FROM ' . $this->quoteTableName($table);
-        $where = $this->buildCondition($condition, $params);
-        $where && $sql .= " WHERE $where";
+        if (!$name) {
+            $name = '*';
+        }
+        if ($name != '*') {
+            $name = "[[$name]]";
+        }
+
+        $name = "COUNT($name) AS [[n]]";
+        $this->select($name);
+        $sql = "SELECT {$this->select} FROM {$this->table}";
+        $sql2 = $this->collectionSql();
+        if ($sql2) {
+            $sql .= " $sql2";
+        }
         $this->sql = $sql;
         $q = $this->_execute();
 
@@ -477,20 +559,23 @@ class OcDao
     /**
      * SUM
      *
-     * @param $table
-     * @param $field
-     * @param string $condition
-     * @param array $params
+     * @param $name
      * @return float
      * @throws Exception
      */
-    public function sum($table, $field, $condition = '', $params = [])
+    public function sum($name)
     {
-        $sql = 'SELECT SUM(' . $this->quoteColumnName($field) . ') AS ' . $this->quoteColumnName('n') . ' FROM ' . $this->quoteTableName($table);
-        $where = $this->buildCondition($condition, $params);
-        $where && $sql .= " WHERE $where";
+        $this->select("SUM($name) AS [[n]]");
+        $this->limit(1);
+        $sql = "SELECT {$this->select} FROM {$this->table}";
+
+        $sql2 = $this->collectionSql();
+        if ($sql2) {
+            $sql .= " $sql2";
+        }
         $this->sql = $sql;
         $q = $this->_execute();
+
         $n = $q->row['n'];
         if ($n === null) {
             $n = 0;
@@ -501,14 +586,34 @@ class OcDao
 
     private function _execute()
     {
+        $res = null;
         try {
             $sql = $this->quoteSql($this->sql);
+            $message = $sql;
             $q = $this->db->query($sql);
 
-            return $q;
+            $res = $q;
         } catch (\Exception $e) {
-            return false;
+            $message = $e->getMessage();
+            $res = false;
         }
+        if ($this->debug) {
+            $information = [
+                'message' => $message,
+                'trace' => [],
+            ];
+            $traces = debug_backtrace();
+            if (isset($traces[1])) {
+                $trace = $traces[1];
+                $information['trace'] = [
+                    'file' => $trace['file'],
+                    'line' => $trace['line'],
+                ];
+            }
+            var_dump($information);
+        }
+
+        return $res;
     }
 
     public function execute()
