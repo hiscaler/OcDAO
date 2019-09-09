@@ -211,6 +211,36 @@ class OcDao
     }
 
     /**
+     * Batch insert new records
+     *
+     * @param $table
+     * @param $columns
+     * @param $rows
+     * @return $this
+     */
+    public function batchInsert($table, $columns, $rows)
+    {
+        $fields = [];
+        foreach ($columns as $name) {
+            $fields[] = $this->quoteColumnName($name);
+        }
+        $values = [];
+        foreach ($rows as $row) {
+            foreach ($row as $k => $v) {
+                $row[$k] = $this->quoteValue($v);
+            }
+            $values[] = '(' . implode(', ', $row) . ')';
+        }
+        $this->sql = sprintf('INSERT INTO %s (%s) VALUES (%s)',
+            $this->quoteTableName($table),
+            implode(', ', $fields),
+            implode(', ', $values)
+        );
+
+        return $this;
+    }
+
+    /**
      * id = 1
      * id IN (1,2)
      *
