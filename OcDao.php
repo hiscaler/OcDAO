@@ -198,17 +198,17 @@ class OcDao
      */
     public function insert($table, $columns)
     {
-        $sql = "INSERT INTO %s";
         $fields = [];
         $values = [];
         foreach ($columns as $column => $value) {
             $fields[] = $this->quoteColumnName($column);
             $values[] = $this->quoteValue($value);
         }
-        $sql .= " (" . implode(', ', $fields) . ")";
-        $sql .= " VALUES (" . implode(', ', $values) . ")";
-
-        $this->sql = sprintf($sql, $this->quoteTableName($table));
+        $this->sql = sprintf('INSERT INTO %s (%s) VALUES (%s)',
+            $this->quoteTableName($table),
+            implode(', ', $fields),
+            implode(', ', $values)
+        );
 
         return $this;
     }
@@ -245,6 +245,7 @@ class OcDao
 
     /**
      * id = 1
+     * id IS NULL
      * id IN (1,2)
      *
      * @param $condition
@@ -270,6 +271,8 @@ class OcDao
                             }
                         }
                         $s .= ' IN (' . implode(", ", $valueList) . ')';
+                    } elseif (is_null($value)) {
+                        $s .= " IS NULL";
                     } else {
                         $s .= ' = ' . (is_numeric($value) ? $value : $this->quoteValue($value));
                     }
@@ -506,9 +509,18 @@ class OcDao
     public function leftJoin($table, $condition = null, $params = [])
     {
         $sql = "LEFT JOIN " . $this->quoteTableName($table);
-        $where = $this->buildCondition($condition, $params);
-        if ($where) {
-            $sql .= ' ON ' . $where;
+        if (is_array($condition)) {
+            $list = [];
+            foreach ($condition as $key => $value) {
+                $list[] = $this->quoteColumnName($key) . ' = ' . $this->quoteColumnName($value);
+            }
+            $condition = implode(' AND ', $list);
+        }
+        if ($where = $this->buildCondition($condition, $params)) {
+            $sql .= " ON $where";
+        }
+        if ($this->leftJoin) {
+            $sql = "{$this->leftJoin} $sql";
         }
         $this->leftJoin = $sql;
 
@@ -525,8 +537,7 @@ class OcDao
     {
         $this->limit(1);
         $sql = "SELECT {$this->select} FROM {$this->table}";
-        $sql2 = $this->collectionSql();
-        if ($sql2) {
+        if ($sql2 = $this->collectionSql()) {
             $sql .= " $sql2";
         }
         $this->sql = $sql;
@@ -543,8 +554,7 @@ class OcDao
     public function all()
     {
         $sql = "SELECT {$this->select} FROM {$this->table}";
-        $sql2 = $this->collectionSql();
-        if ($sql2) {
+        if ($sql2 = $this->collectionSql()) {
             $sql .= " $sql2";
         }
 
@@ -668,9 +678,7 @@ class OcDao
         $this->select("SUM($name) AS [[n]]");
         $this->limit(1);
         $sql = "SELECT {$this->select} FROM {$this->table}";
-
-        $sql2 = $this->collectionSql();
-        if ($sql2) {
+        if ($sql2 = $this->collectionSql()) {
             $sql .= " $sql2";
         }
         $this->sql = $sql;
