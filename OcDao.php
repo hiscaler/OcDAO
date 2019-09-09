@@ -52,6 +52,12 @@ class OcDao
         return strpos($name, $startingCharacter) !== false ? $name : $startingCharacter . $name . $endingCharacter;
     }
 
+    /**
+     * Quote table name
+     *
+     * @param $name
+     * @return string
+     */
     private function quoteTableName($name)
     {
         if (strpos($name, '(') !== false || strpos($name, '{{') !== false) {
@@ -79,6 +85,12 @@ class OcDao
         return $name === '*' || strpos($name, $startingCharacter) !== false ? $name : $startingCharacter . $name . $endingCharacter;
     }
 
+    /**
+     * Quote column name
+     *
+     * @param $name
+     * @return bool|string
+     */
     private function quoteColumnName($name)
     {
         if (strpos($name, '(') !== false || strpos($name, '[[') !== false) {
@@ -130,6 +142,12 @@ class OcDao
         return $sql;
     }
 
+    /**
+     * Quote SQL string
+     *
+     * @param $sql
+     * @return string|string[]|null
+     */
     private function quoteSql($sql)
     {
         $sql = preg_replace_callback(
@@ -168,6 +186,13 @@ class OcDao
         return $this;
     }
 
+    /**
+     * Insert new record
+     *
+     * @param $table
+     * @param $columns
+     * @return $this
+     */
     public function insert($table, $columns)
     {
         $sql = "INSERT INTO %s";
@@ -318,6 +343,12 @@ class OcDao
         }
     }
 
+    /**
+     * Process `SELECT` sql names
+     *
+     * @param $select
+     * @return $this
+     */
     public function select($select)
     {
         $this->_select($select, false);
@@ -325,6 +356,12 @@ class OcDao
         return $this;
     }
 
+    /**
+     * Add `SELECT` SQL names
+     *
+     * @param $select
+     * @return $this
+     */
     public function addSelect($select)
     {
         $this->_select($select, true);
@@ -332,6 +369,12 @@ class OcDao
         return $this;
     }
 
+    /**
+     * Process `FROM` table
+     *
+     * @param $table
+     * @return $this
+     */
     public function from($table)
     {
         $this->table = $this->quoteTableName($table);
@@ -354,6 +397,12 @@ class OcDao
         return $this;
     }
 
+    /**
+     * Process `ORDER BY` SQL
+     *
+     * @param $orders
+     * @return $this
+     */
     public function orderBy($orders)
     {
         $s = [];
@@ -370,6 +419,12 @@ class OcDao
         return $this;
     }
 
+    /**
+     * Process `OFFSET` SQL
+     *
+     * @param $n
+     * @return $this
+     */
     public function offset($n)
     {
         $n = (int) $n;
@@ -378,6 +433,12 @@ class OcDao
         return $this;
     }
 
+    /**
+     * Process `LIMIT` SQL
+     *
+     * @param $n
+     * @return $this
+     */
     public function limit($n)
     {
         $n = (int) $n;
@@ -386,6 +447,12 @@ class OcDao
         return $this;
     }
 
+    /**
+     * Add index name
+     *
+     * @param $name
+     * @return $this
+     */
     public function indexBy($name)
     {
         $this->indexBy = $name;
