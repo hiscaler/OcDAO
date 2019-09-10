@@ -99,6 +99,10 @@ class OcDao
         if (($pos = strrpos($name, '.')) !== false) {
             $prefix = $this->quoteTableName(substr($name, 0, $pos)) . '.';
             $name = substr($name, $pos + 1);
+            if (($pos = stripos($name, ' AS ')) !== false) {
+                $prefix = $prefix . $this->quoteTableName(substr($name, 0, $pos)) . ' AS ';
+                $name = substr($name, $pos + 4);
+            }
         } elseif (($pos = stripos($name, ' AS ')) !== false) {
             $prefix = $this->quoteTableName(substr($name, 0, $pos)) . ' AS ';
             $name = substr($name, $pos + 4);
