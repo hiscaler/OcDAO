@@ -29,6 +29,8 @@ class OcDao
     private $tableQuoteCharacter = "`";
     private $columnQuoteCharacter = '`';
     private $indexBy;
+    private $groupBy;
+    private $having;
 
     /**
      * @var bool 是否为手工书写的 SQL
@@ -143,6 +145,12 @@ class OcDao
         }
         if ($this->where) {
             $sql .= " WHERE {$this->where}";
+        }
+        if ($this->groupBy) {
+            $sql .= " GROUP BY {$this->groupBy}";
+            if ($this->having) {
+                $sql .= " HAVING {$this->having}";
+            }
         }
         if ($this->orderBy) {
             $sql .= " ORDER BY {$this->orderBy}";
@@ -460,6 +468,34 @@ class OcDao
         }
 
         $this->orderBy = $s ? implode(', ', $s) : '';
+
+        return $this;
+    }
+
+    /**
+     * Group By
+     *
+     * @param $name
+     * @return $this
+     */
+    public function groupBy($name)
+    {
+        $this->groupBy = $this->quoteColumnName($name);
+
+        return $this;
+    }
+
+    /**
+     * Having
+     *
+     * @param $condition
+     * @param array $params
+     * @return $this
+     * @throws Exception
+     */
+    public function having($condition, $params = [])
+    {
+        $this->having = $this->buildCondition($condition, $params);
 
         return $this;
     }
