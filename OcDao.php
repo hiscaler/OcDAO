@@ -31,6 +31,11 @@ class OcDao
     private $indexBy;
 
     /**
+     * @var bool 是否为手工书写的 SQL
+     */
+    private $isCommand = false;
+
+    /**
      * @var string SQL
      */
     private $sql;
@@ -539,12 +544,15 @@ class OcDao
      */
     public function one()
     {
-        $this->limit(1);
-        $sql = "SELECT {$this->select} FROM {$this->table}";
-        if ($sql2 = $this->collectionSql()) {
-            $sql .= " $sql2";
+        if (!$this->isCommand) {
+            $this->limit(1);
+            $sql = "SELECT {$this->select} FROM {$this->table}";
+            if ($sql2 = $this->collectionSql()) {
+                $sql .= " $sql2";
+            }
+            $this->sql = $sql;
         }
-        $this->sql = $sql;
+
         $q = $this->_execute();
 
         return $q === false ? false : $q->row;
@@ -557,14 +565,15 @@ class OcDao
      */
     public function all()
     {
-        $sql = "SELECT {$this->select} FROM {$this->table}";
-        if ($sql2 = $this->collectionSql()) {
-            $sql .= " $sql2";
+        if (!$this->isCommand) {
+            $sql = "SELECT {$this->select} FROM {$this->table}";
+            if ($sql2 = $this->collectionSql()) {
+                $sql .= " $sql2";
+            }
+
+            $this->sql = $sql;
         }
-
-        $this->sql = $sql;
         $q = $this->_execute();
-
         $rawRows = $q === false ? [] : $q->rows;
         if ($rawRows && $this->indexBy) {
             $indexName = $this->indexBy;
@@ -694,6 +703,24 @@ class OcDao
         }
 
         return (float) $n;
+    }
+
+    /**
+     * 执行的手工书写的 SQL 语句
+     *
+     * @param $sql
+     * @param array $params
+     * @return $this
+     */
+    public function command($sql, $params = [])
+    {
+        $this->isCommand = true;
+        if ($params) {
+            $sql = strtr($sql, $params);
+        }
+        $this->sql = $sql;
+
+        return $this;
     }
 
     private function _execute()
