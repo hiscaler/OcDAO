@@ -557,7 +557,7 @@ class OcDao
         if (is_array($condition)) {
             $list = [];
             foreach ($condition as $key => $value) {
-                $list[] = $this->quoteColumnName($key) . ' = ' . $this->quoteColumnName($value);
+                $list[] = $this->quoteColumnName($key) . ' = ' . $this->quoteValue($value);
             }
             $condition = implode(' AND ', $list);
         }
