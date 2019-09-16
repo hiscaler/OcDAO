@@ -251,7 +251,7 @@ class OcDao
             }
             $values[] = '(' . implode(', ', $row) . ')';
         }
-        $this->sql = sprintf('INSERT INTO %s (%s) VALUES (%s)',
+        $this->sql = sprintf('INSERT INTO %s (%s) VALUES %s',
             $this->quoteTableName($table),
             implode(', ', $fields),
             implode(', ', $values)
