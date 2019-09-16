@@ -201,7 +201,10 @@ class OcDao
         $this->orderBy = null;
         $this->leftJoin = null;
         $this->indexBy = null;
+        $this->groupBy = null;
+        $this->having = null;
         $this->sql = null;
+        $this->isCommand = false;
 
         return $this;
     }
