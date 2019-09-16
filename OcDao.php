@@ -31,6 +31,7 @@ class OcDao
     private $indexBy;
     private $groupBy;
     private $having;
+    private $conditions = [];
 
     /**
      * @var bool 是否为手工书写的 SQL
@@ -143,7 +144,7 @@ class OcDao
         if ($this->leftJoin) {
             $sql .= " $this->leftJoin";
         }
-        if ($this->where) {
+        if ($this->where = $this->parseConditions($this->conditions)) {
             $sql .= " WHERE {$this->where}";
         }
         if ($this->groupBy) {
@@ -205,6 +206,7 @@ class OcDao
         $this->having = null;
         $this->sql = null;
         $this->isCommand = false;
+        $this->conditions = [];
 
         return $this;
     }
@@ -264,52 +266,143 @@ class OcDao
     }
 
     /**
-     * id = 1
-     * id IS NULL
-     * id IN (1,2)
+     * Add condition
      *
+     * @param $operation
      * @param $condition
-     * @param $params
-     * @return string
+     * @param array $params
      * @throws Exception
      */
-    private function buildCondition($condition, $params)
+    private function addCondition($operation, $condition, $params = [])
+    {
+        var_dump($operation);
+        if (!in_array(strtolower($operation), ['AND', 'OR'])) {
+            throw new Exception("$operation is not a valid operation.");
+        }
+        $this->conditions[] = [$operation, $condition, $params];
+    }
+
+    /**
+     * 条件解析
+     *
+     * ["id" => 1] : id = 1
+     * ["id" => [1, 2]] : id IN (1, 2)
+     * ["id" => []] : 0 = 1
+     * ["remark" => NULL] : remark IS NULL
+     * ["AND", ["id" => 1], ["LIKE", "username", "hiscaler"]] : id = 1 AND username LIKE "%hiscaler%"
+     *
+     * @param $conditions
+     * @return string
+     */
+    private function parseConditions($conditions)
     {
         $where = '';
-        if (is_array($condition)) {
-            if ($condition) {
-                $ws = [];
-                foreach ($condition as $key => $value) {
-                    $s = $this->quoteColumnName($key);
-                    if (is_array($value)) {
-                        $valueList = [];
-                        foreach ($value as $v) {
-                            if (is_numeric($v)) {
-                                $valueList[] = $v;
-                            } else {
-                                $valueList[] = $this->quoteValue($v);
-                            }
-                        }
-                        $s .= ' IN (' . implode(", ", $valueList) . ')';
-                    } elseif (is_null($value)) {
-                        $s .= " IS NULL";
-                    } else {
-                        $s .= ' = ' . (is_numeric($value) ? $value : $this->quoteValue($value));
+        $fnFixValues = function ($values, $quote = true) {
+            $vs = [];
+            if (is_array($values)) {
+                foreach ($values as $value) {
+                    if ($quote) {
+                        $value = is_numeric($value) ? $value : $this->quoteValue($value);
                     }
-                    $ws[] = $s;
-                }
-                $where = implode(" AND ", $ws);
-            }
-        } elseif (is_null($condition)) {
-            $where = '';
-        } elseif (is_string($condition)) {
-            $where = $condition;
-        } elseif (!is_string($condition)) {
-            throw new Exception("Condition error.");
-        }
 
-        if ($params) {
-            $where = strtr($condition, $params);
+                    if (!in_array($value, $vs)) {
+                        $vs[] = $value;
+                    }
+                }
+            } else {
+                if ($quote) {
+                    $vs[] = is_numeric($values) ? $values : $this->quoteValue($values);
+                } else {
+                    $vs[] = $values;
+                }
+            }
+
+            return $vs;
+        };
+        foreach ($conditions as $i => $data) {
+            $operation = strtoupper($data[0]);
+            if ($i > 0) {
+                $where .= " $operation ";
+            }
+            $condition = $data[1];
+            $params = $data[2];
+            if (is_string($condition)) {
+                $where .= $condition;
+                if ($params && is_array($params)) {
+                    $where = strtr($where, $params);
+                }
+            } elseif (is_array($condition)) {
+                if (!$condition) {
+                    continue;
+                }
+                $ws = [];
+                $indexed = true;
+                foreach ($condition as $k => $v) {
+                    if (is_string($k)) {
+                        $indexed = false;
+                        break;
+                    }
+                }
+                if ($indexed) {
+                    $columnName = $this->quoteColumnName($condition[1]);
+
+                    $innerOperation = isset($condition[3]) ? strtolower(trim($condition[3])) : 'AND';
+                    if (!in_array($innerOperation, ['AND', "OR"])) {
+                        $innerOperation = "AND";
+                    }
+                    $sqlKeyword = strtoupper(trim($condition[0]));
+                    switch ($sqlKeyword) {
+                        case "IN":
+                            $vs = $fnFixValues($condition[2], true);
+                            $s = isset($vs[1]) ? "$columnName IN (" . implode(", ", $vs) . ")" : "$columnName = {$vs[0]}";
+                            break;
+
+                        case "NOT IN":
+                            $vs = $fnFixValues($condition[2], true);
+                            $s = isset($vs[1]) ? "$columnName NOT IN (" . implode(", ", $vs) . ")" : "$columnName <> {$vs[0]}";
+                            break;
+
+                        case "LIKE":
+                        case "NOT LIKE":
+                            $vs = $fnFixValues($condition[2], false);
+                            if (isset($vs[1])) {
+                                $likes = [];
+                                foreach ($vs as $v) {
+                                    $likes[] = "$columnName $sqlKeyword '%{$v}%'";
+                                }
+                                $s = implode(" $innerOperation ", $likes);
+                            } else {
+                                $s = "$columnName $sqlKeyword '%{$vs[0]}%'";
+                            }
+                            break;
+
+                        default:
+                            $s = '';
+                            break;
+                    }
+                    $s && $ws[] = $s;
+                } else {
+                    foreach ($condition as $key => $value) {
+                        $columnName = $this->quoteColumnName($key);
+                        if (is_array($value)) {
+                            if ($value) {
+                                $vs = $fnFixValues($value);
+                                $s = isset($vs[1]) ? "$columnName IN (" . implode(", ", $vs) . ")" : "$columnName = {$vs[0]}";
+                            } else {
+                                $s = "0 = 1";
+                            }
+                        } elseif (is_string($value) || is_numeric($value)) {
+                            $s = "$columnName = " . (is_numeric($value) ? $value : $this->quoteValue($value));
+                        } elseif (is_null($value)) {
+                            $s = "$columnName IS NULL";
+                        } else {
+                            $s = "0 = 1";
+                        }
+                        $s && $ws[] = $s;
+                    }
+                }
+                $ws && $where .= "(" . implode(" AND ", $ws) . ")";
+            }
         }
 
         return $where;
@@ -333,8 +426,8 @@ class OcDao
                 $sets[] = self::quoteColumnName($k) . ' = ' . $this->quoteValue($v);
             }
             $sql = "UPDATE " . $this->quoteTableName($table) . " SET " . implode(", ", $sets);
-            $where = $this->buildCondition($condition, $params);
-            if ($where) {
+            $this->where($condition, $params);
+            if ($where = $this->parseConditions($this->conditions)) {
                 $sql .= " WHERE $where";
             }
             $this->sql = $sql;
@@ -357,7 +450,8 @@ class OcDao
     public function delete($table, $condition = '', $params = [])
     {
         $sql = "DELETE FROM " . $this->quoteTableName($table);
-        $where = $this->buildCondition($condition, $params);
+        $this->where($condition, $params);
+        $where = $this->parseConditions($this->conditions);
         $where && $sql .= " WHERE $where";
         $this->sql = $sql;
 
@@ -448,7 +542,39 @@ class OcDao
      */
     public function where($condition, $params = [])
     {
-        $this->where = $this->buildCondition($condition, $params);
+        $this->conditions = [
+            ['AND', $condition, $params]
+        ];
+
+        return $this;
+    }
+
+    /**
+     * AND WHERE
+     *
+     * @param $condition
+     * @param array $params
+     * @return $this
+     * @throws Exception
+     */
+    public function andWhere($condition, $params = [])
+    {
+        $this->addCondition('AND', $condition, $params);
+
+        return $this;
+    }
+
+    /**
+     * OR WHERE
+     *
+     * @param $condition
+     * @param array $params
+     * @return $this
+     * @throws Exception
+     */
+    public function orWhere($condition, $params = [])
+    {
+        $this->addCondition('OR', $condition, $params);
 
         return $this;
     }
@@ -498,7 +624,7 @@ class OcDao
      */
     public function having($condition, $params = [])
     {
-        $this->having = $this->buildCondition($condition, $params);
+        $this->having = $this->parseConditions([['AND', $condition, $params]]);
 
         return $this;
     }
@@ -564,7 +690,7 @@ class OcDao
             }
             $condition = implode(' AND ', $list);
         }
-        if ($where = $this->buildCondition($condition, $params)) {
+        if ($where = $this->parseConditions([['AND', $condition, $params]])) {
             $sql .= " ON $where";
         }
         if ($this->leftJoin) {
